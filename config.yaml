@@ -112,14 +112,14 @@ transform:
     - bytes_received
     - asn
 
-  # 浮点类型字段（rename 后的目标字段名）
-  # origin-fbl / time-to-first-byte 未经 rename，保持原名进入 extras
+  # 浮点类型字段（rename 后的目标字段名；未经 rename 的字段保持原始名）
+  # origin-fbl / time-to-first-byte 未配置 rename，以原始名进入 extras，类型转换仍生效
   float_fields:
     - time_taken
     - origin-fbl
     - time-to-first-byte
 
-  # 需要去除查询参数的字段（截取 ? 之前的纯路径）
-  # cs-uri-stem 有时会带上查询参数，此处配置后自动截断
+  # 需要去除查询参数的字段（截取 ? 之前的纯路径，使用 rename 后的目标字段名）
+  # cs-uri-stem 经 rename 后为 uri_path，此处填 uri_path
   strip_query_fields:
     - uri_path

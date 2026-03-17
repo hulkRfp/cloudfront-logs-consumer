@@ -42,6 +42,10 @@ class DorisWriter:
         """写入一条记录到 buffer。由 consumer 通过 should_flush()/flush() 控制落盘时机。"""
         self._buffer.append(record)
 
+    def has_pending(self) -> bool:
+        """是否有待写入的数据。"""
+        return bool(self._buffer)
+
     def should_flush(self) -> bool:
         return bool(self._buffer) and (
             len(self._buffer) >= self.batch_size
@@ -107,7 +111,15 @@ class DorisWriter:
 
         match status:
             case "Success" | "Publish Timeout":
-                logger.info(f"Stream Load OK label={label} rows={len(lines)}")
+                filtered = result.get("NumberFilteredRows", 0)
+                if filtered:
+                    logger.warning(
+                        f"Stream Load label={label} rows={len(lines)} "
+                        f"filtered={filtered} (type mismatch or length exceeded), "
+                        f"error_url={result.get('ErrorURL', '')}"
+                    )
+                else:
+                    logger.info(f"Stream Load OK label={label} rows={len(lines)}")
             case "Label Already Exists" if result.get("ExistingJobStatus") in ("VISIBLE", "COMMITTED"):
                 logger.info(f"Stream Load label={label} already committed, skipping")
             case _:

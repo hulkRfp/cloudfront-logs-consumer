@@ -172,7 +172,7 @@ class StreamConsumer:
                 if next_iter is None:
                     logger.info(f"[{self.stream_name}:{shard_id}] Shard closed")
                     # shard 关闭时强制 flush 剩余 buffer，确保数据不丢
-                    if self.writer._buffer:
+                    if self.writer.has_pending():
                         self.writer.flush()
                         if not self.backfill:
                             for sid, seq in list(pending_seqs.items()):
@@ -252,6 +252,8 @@ class StreamConsumer:
     def _process(self, shard_id: str, records: list) -> tuple[str, bool]:
         """
         处理一批记录，返回 (last_seq, shard_done)。
+        last_seq：本批最后一条记录的 SequenceNumber（无论成功或跳过均推进）；
+                  空字符串表示本批没有处理任何记录（不应发生，仅防御性处理）。
         shard_done=True 表示遇到超过 backfill_end 的记录，该 shard 可以停止消费。
         """
         last_seq = ""

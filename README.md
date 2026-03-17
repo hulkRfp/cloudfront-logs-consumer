@@ -110,6 +110,20 @@ transform:
     - uri_query
     - referer
     - user_agent
+
+  int_fields:                     # 整数类型字段（rename 后的目标字段名）
+    - status_code
+    - bytes_sent
+    - bytes_received
+    - asn
+
+  float_fields:                   # 浮点类型字段（rename 后的目标字段名；未经 rename 的字段保持原始名）
+    - time_taken
+    - origin-fbl                  # 未配置 rename，以原始名进入 extras，类型转换仍生效
+    - time-to-first-byte
+
+  strip_query_fields:             # 去除查询参数的字段（截取 ? 之前的纯路径，使用 rename 后的目标字段名）
+    - uri_path
 ```
 
 ### 环境变量覆盖

@@ -1,0 +1,189 @@
+---
+# ConfigMap：挂载 config.yaml（敏感信息通过 Secret 环境变量覆盖，此处可留占位值）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudfront-consumer-config
+  namespace: default
+data:
+  config.yaml: |
+    kinesis:
+      region: "us-east-1"
+      batch_size: 5000
+      poll_interval_active: 1.0
+      poll_interval_idle: 30.0
+      shard_refresh_interval: 60
+      initial_position: "LATEST"
+      stream_name: "cloudfront-realtime-logs"
+    doris:
+      fe_host: "doris-fe"
+      fe_port: 8030
+      database: "your_db"
+      table: "cloudfront_logs"
+      username: "root"
+      password: "placeholder"
+      batch_size: 5000
+      flush_interval: 30.0
+    redis:
+      host: "redis-host"
+      port: 6379
+      password: "placeholder"
+      db: 0
+      lock_ttl: 30
+      heartbeat_interval: 10.0
+    transform:
+      source_fields: [timestamp, c-ip, sc-status, cs-method, cs-host, cs-uri-stem,
+        cs-uri-query, time-taken, sc-bytes, cs-bytes, x-edge-result-type,
+        x-edge-response-result-type, x-edge-location, x-edge-detailed-result-type,
+        origin-fbl, time-to-first-byte, cs-referer, cs-user-agent, ssl-protocol, asn]
+      target_fields: [log_time, client_ip, status_code, method, host, uri_path,
+        uri_query, time_taken, bytes_sent, bytes_received, edge_result,
+        edge_location, referer, user_agent, ssl_protocol, asn, source, extras]
+      rename:
+        timestamp: log_time
+        "c-ip": client_ip
+        "sc-status": status_code
+        "cs-method": method
+        "cs-host": host
+        "cs-uri-stem": uri_path
+        "cs-uri-query": uri_query
+        "time-taken": time_taken
+        "sc-bytes": bytes_sent
+        "cs-bytes": bytes_received
+        "x-edge-result-type": edge_result
+        "x-edge-location": edge_location
+        "cs-referer": referer
+        "cs-user-agent": user_agent
+        "ssl-protocol": ssl_protocol
+      drop_fields: [x-edge-response-result-type, x-edge-detailed-result-type]
+      add_fields:
+        source: "literal:cloudfront"
+      url_decode_fields: [uri_query, referer, user_agent]
+      int_fields: [status_code, bytes_sent, bytes_received, asn]
+      float_fields: [time_taken, origin-fbl, time-to-first-byte]
+      strip_query_fields: [uri_path]
+
+---
+# Secret：敏感配置通过环境变量注入，覆盖 config.yaml 中的占位值
+# 生产环境建议用 External Secrets / Vault 管理
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloudfront-consumer-secret
+  namespace: default
+type: Opaque
+stringData:
+  doris-password: "your_doris_password"
+  redis-password: "your_redis_password"
+
+---
+# Deployment：持续消费
+# 基于 Redis 分布式锁实现 shard 动态分配，Pod 随时扩缩容均安全，无需手动配置分片序号
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudfront-consumer
+  namespace: default
+spec:
+  replicas: 2          # 可随时调整，Redis 锁自动重新分配 shard
+  selector:
+    matchLabels:
+      app: cloudfront-consumer
+  template:
+    metadata:
+      labels:
+        app: cloudfront-consumer
+    spec:
+      serviceAccountName: cloudfront-consumer-sa  # 需要 kinesis:GetRecords 等权限
+      containers:
+        - name: consumer
+          image: your-registry/cloudfront-consumer:latest
+          command: ["python", "main.py", "--config", "/etc/consumer/config.yaml"]
+          env:
+            # 通过环境变量覆盖 config.yaml 中的敏感配置
+            - name: CF_DORIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cloudfront-consumer-secret
+                  key: doris-password
+            - name: CF_REDIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cloudfront-consumer-secret
+                  key: redis-password
+          volumeMounts:
+            - name: config
+              mountPath: /etc/consumer
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          livenessProbe:
+            exec:
+              # 检查进程是否还在正常运行（通过 Python 进程本身存活判断）
+              command: ["python", "-c", "import sys; sys.exit(0)"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: cloudfront-consumer-config
+
+---
+# Job：补跑历史数据（单次运行，完成后自动退出，不使用 Redis 锁）
+# 使用前修改 --start-time / --end-time，然后 kubectl apply -f k8s-deployment.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cloudfront-consumer-backfill
+  namespace: default
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: cloudfront-consumer-sa
+      containers:
+        - name: backfill
+          image: your-registry/cloudfront-consumer:latest
+          command:
+            - python
+            - main.py
+            - --config
+            - /etc/consumer/config.yaml
+            - --backfill
+            - --start-time
+            - "2026-03-01T00:00:00+00:00"
+            - --end-time
+            - "2026-03-02T00:00:00+00:00"
+          env:
+            - name: CF_DORIS__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cloudfront-consumer-secret
+                  key: doris-password
+            # backfill 模式不连接 Redis，无需注入 CF_REDIS__PASSWORD
+          volumeMounts:
+            - name: config
+              mountPath: /etc/consumer
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: config
+          configMap:
+            name: cloudfront-consumer-config
+
+---
+# ServiceAccount + IRSA 注解（EKS 场景）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cloudfront-consumer-sa
+  namespace: default
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/cloudfront-consumer-role"

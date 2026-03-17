@@ -1,0 +1,125 @@
+kinesis:
+  region: "us-east-1"
+  batch_size: 5000
+  poll_interval_active: 1.0   # 有数据时的拉取间隔（秒）
+  poll_interval_idle: 30.0    # 无数据时的拉取间隔（秒）
+  shard_refresh_interval: 60  # shard 列表刷新间隔（秒），扩缩容时自动感知新 shard；Pod 下线后最大空窗期 = lock_ttl + shard_refresh_interval
+  # checkpoint 不存在时的初始消费位置：LATEST / TRIM_HORIZON / AT_TIMESTAMP
+  initial_position: "LATEST"
+  # initial_timestamp: "2026-03-15T10:00:00+00:00"  # AT_TIMESTAMP 时生效
+  stream_name: "cloudfront-realtime-logs"
+
+doris:
+  fe_host: "doris-fe"
+  fe_port: 8030
+  database: "your_db"
+  table: "cloudfront_logs"    # 写入的目标表
+  username: "root"
+  password: "your_password"
+  batch_size: 5000
+  flush_interval: 30.0        # 超时强制 flush（秒）；日志量小时数据最多延迟此时间落盘
+
+# Redis 分布式锁 + checkpoint 配置（可选）
+# 配置后自动启用分布式模式，多 Pod 动态抢占 shard，支持随时扩缩容
+# 不配置则以单实例模式启动（启动时打印 WARNING），此时只允许单 Pod 部署
+# 已配置但连接失败时应用直接退出，避免多 Pod 无锁运行导致重复消费
+redis:
+  host: "redis-host"
+  port: 6379
+  password: ""                # 无密码留空
+  db: 0
+  lock_ttl: 30                # shard 锁的 TTL（秒），Pod 崩溃后此时间内锁自动释放；空窗期 = lock_ttl + shard_refresh_interval
+  heartbeat_interval: 10.0    # 锁续期心跳间隔（秒），必须小于 lock_ttl / 2，否则锁可能在续期前过期
+
+transform:
+  source_fields:
+    - timestamp
+    - c-ip
+    - sc-status
+    - cs-method
+    - cs-host
+    - cs-uri-stem
+    - cs-uri-query
+    - time-taken
+    - sc-bytes
+    - cs-bytes
+    - x-edge-result-type
+    - x-edge-response-result-type
+    - x-edge-location
+    - x-edge-detailed-result-type
+    - origin-fbl
+    - time-to-first-byte
+    - cs-referer
+    - cs-user-agent
+    - ssl-protocol
+    - asn
+
+  target_fields:
+    - log_time
+    - client_ip
+    - status_code
+    - method
+    - host
+    - uri_path
+    - uri_query
+    - time_taken
+    - bytes_sent
+    - bytes_received
+    - edge_result
+    - edge_location
+    - referer
+    - user_agent
+    - ssl_protocol
+    - asn
+    - source          # add_fields 新增的固定字段，需在此列出才能作为顶层字段写入
+    - extras          # 不在此列表中的字段自动合并到此列，JSON 格式存储
+
+  rename:
+    timestamp: log_time
+    "c-ip": client_ip
+    "sc-status": status_code
+    "cs-method": method
+    "cs-host": host
+    "cs-uri-stem": uri_path
+    "cs-uri-query": uri_query
+    "time-taken": time_taken
+    "sc-bytes": bytes_sent
+    "cs-bytes": bytes_received
+    "x-edge-result-type": edge_result
+    "x-edge-location": edge_location
+    "cs-referer": referer
+    "cs-user-agent": user_agent
+    "ssl-protocol": ssl_protocol
+
+  drop_fields:
+    - x-edge-response-result-type
+    - x-edge-detailed-result-type
+
+  add_fields:
+    source: "literal:cloudfront"
+    # env_name: "env:APP_ENV"   # 从环境变量注入
+
+  # 需要 URL 解码的字段（保留原始特殊字符，不做过滤）
+  url_decode_fields:
+    - uri_query
+    - referer
+    - user_agent
+
+  # 整数类型字段（rename 后的目标字段名）
+  int_fields:
+    - status_code
+    - bytes_sent
+    - bytes_received
+    - asn
+
+  # 浮点类型字段（rename 后的目标字段名）
+  # origin-fbl / time-to-first-byte 未经 rename，保持原名进入 extras
+  float_fields:
+    - time_taken
+    - origin-fbl
+    - time-to-first-byte
+
+  # 需要去除查询参数的字段（截取 ? 之前的纯路径）
+  # cs-uri-stem 有时会带上查询参数，此处配置后自动截断
+  strip_query_fields:
+    - uri_path

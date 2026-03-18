@@ -110,6 +110,8 @@ class DorisWriter:
         )
         if resp.status_code in (301, 302, 307, 308):
             redirect_url = resp.headers.get("Location")
+            if not redirect_url:
+                raise RuntimeError(f"Stream Load redirect missing Location header, status={resp.status_code}")
             resp = requests.put(
                 redirect_url,
                 data="\n".join(lines).encode("utf-8"),

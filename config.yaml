@@ -5,7 +5,7 @@ kinesis:
   poll_interval_idle: 30.0    # 无数据时的拉取间隔（秒）
   shard_refresh_interval: 60  # shard 列表刷新间隔（秒），扩缩容时自动感知新 shard；Pod 下线后最大空窗期 = lock_ttl + shard_refresh_interval
   # checkpoint 不存在时的初始消费位置：LATEST / TRIM_HORIZON / AT_TIMESTAMP
-  initial_position: "LATEST"
+  initial_position: "TRIM_HORIZON"
   # initial_timestamp: "2026-03-15T10:00:00+00:00"  # AT_TIMESTAMP 时生效
   stream_name: "cloudfront-realtime-logs"
 

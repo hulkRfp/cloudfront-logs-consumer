@@ -137,7 +137,11 @@ class StreamConsumer:
                         if shard_done:
                             # 该 shard 已消费到 end_time，flush 剩余 buffer 后标记完成
                             logger.info(f"[{self.stream_name}:{shard_id}] Reached end_time, done")
-                            self.writer.flush()
+                            try:
+                                self.writer.flush()
+                            except Exception as e:
+                                logger.error(f"[{self.stream_name}:{shard_id}] Flush failed on shard_done: {e}")
+                                raise
                             self._bf_ckpt_delete(shard_id)
                             closed_shards.add(shard_id)
                             iterators.pop(shard_id, None)
@@ -200,8 +204,8 @@ class StreamConsumer:
         self._running = False
         try:
             self.writer.flush()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Flush on stop failed: {e}")
 
     def _rebalance_shards(self, open_ids: set[str], iterators: dict[str, str], closed_shards: set[str]):
         """
@@ -336,7 +340,7 @@ class StreamConsumer:
                 code = e.response["Error"]["Code"]
                 if code in ("InvalidArgumentException", "ResourceNotFoundException"):
                     logger.warning(
-                        f"[{self.stream_name}:{shard_id}] Checkpoint invalid/expired ({code}), "
+                        f"[{self.stream_name}:{shard_id}] Checkpoint invalid/expired ({code}: {e.response['Error'].get('Message', '')}), "
                         f"falling back to {self.initial_position}"
                     )
                     if self.backfill:

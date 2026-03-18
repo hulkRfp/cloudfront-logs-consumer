@@ -21,12 +21,12 @@ _DEFAULT_URL_DECODE_FIELDS = {"uri_query", "referer", "user_agent"}
 class Transformer:
     def __init__(self, config: dict):
         t = config["transform"]
-        self.source_fields: list[str] = t["source_fields"]
-        self.target_fields: list[str] = t["target_fields"]
-        self.rename: dict[str, str] = t.get("rename", {})
-        self.drop_fields: list[str] = t.get("drop_fields", [])
-        self.add_fields: dict[str, str] = t.get("add_fields", {})
-        self.url_decode_fields: list[str] = t.get("url_decode_fields", list(_DEFAULT_URL_DECODE_FIELDS))
+        self.source_fields: list[str] = t["source_fields"] or []
+        self.target_fields: list[str] = t["target_fields"] or []
+        self.rename: dict[str, str] = t.get("rename") or {}
+        self.drop_fields: list[str] = t.get("drop_fields") or []
+        self.add_fields: dict[str, str] = t.get("add_fields") or {}
+        self.url_decode_fields: list[str] = t.get("url_decode_fields") or list(_DEFAULT_URL_DECODE_FIELDS)
         self._explicit: set[str] = {f for f in self.target_fields if f != "extras"}
         # 类型转换字段集合提升为实例变量，避免每条记录重建 set
         # 数值类型转换字段，从配置读取，避免写死

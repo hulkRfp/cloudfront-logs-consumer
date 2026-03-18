@@ -114,7 +114,6 @@ transform:
   int_fields:                     # 整数类型字段（rename 后的目标字段名）
     - status_code
     - bytes_sent
-    - bytes_received
     - asn
 
   float_fields:                   # 浮点类型字段（rename 后的目标字段名；未经 rename 的字段保持原始名）
@@ -207,9 +206,9 @@ python main.py --debug-format \
     "uri_query": "foo=bar&baz=1",
     "time_taken": 0.023,
     "bytes_sent": 1024,
-    "bytes_received": 512,
     "edge_result": "Hit",
     "edge_location": "NRT12-C1",
+    "request_id": "zgzazny939Opojym52L1lelPT0a9Ar1MxqM0iUK0LXHj6SOA9CrK8w==",
     "referer": null,
     "user_agent": "Mozilla/5.0 ...",
     "ssl_protocol": "TLSv1.3",

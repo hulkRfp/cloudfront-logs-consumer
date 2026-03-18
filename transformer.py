@@ -30,10 +30,9 @@ class Transformer:
         self._explicit: set[str] = {f for f in self.target_fields if f != "extras"}
         # 类型转换字段集合提升为实例变量，避免每条记录重建 set
         # 数值类型转换字段，从配置读取，避免写死
-        self._int_fields: frozenset[str] = frozenset(t.get("int_fields", []))
-        self._float_fields: frozenset[str] = frozenset(t.get("float_fields", []))
-        # 需要去除查询参数的字段（截取 ? 之前的部分）
-        self._strip_query_fields: frozenset[str] = frozenset(t.get("strip_query_fields", []))
+        self._int_fields: frozenset[str] = frozenset(t.get("int_fields") or [])
+        self._float_fields: frozenset[str] = frozenset(t.get("float_fields") or [])
+        self._strip_query_fields: frozenset[str] = frozenset(t.get("strip_query_fields") or [])
 
     def parse(self, raw_line: str) -> dict[str, Any] | None:
         """

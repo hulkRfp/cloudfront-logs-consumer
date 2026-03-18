@@ -456,10 +456,12 @@ def run_debug_format(cfg: dict, at_timestamp: str | None, limit: int):
                     break
                 try:
                     raw = r["Data"].decode("utf-8", errors="replace")
+                    logger.warning(f"[debug] raw: {repr(raw[:200])}")
                     if parsed := transformer.parse(raw):
                         collected.append(parsed)
                 except Exception as e:
-                    logger.warning(f"[debug] Skipping record: {e}")
+                    import traceback
+                    logger.warning(f"[debug] Skipping record: {e}\n{traceback.format_exc()}")
             if not iterator or not records:
                 break
 

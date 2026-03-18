@@ -369,11 +369,11 @@ class StreamConsumer:
 
     def _bf_ckpt_get(self, shard_id: str) -> str | None:
         """读取 backfill checkpoint，无 Redis 时返回 None（每次从头跑）。"""
-        redis = self.checkpoint._redis
-        if redis is None:
+        rc = self.checkpoint.redis_client
+        if rc is None:
             return None
         try:
-            val = redis.get(self._bf_ckpt_prefix + shard_id)
+            val = rc.get(self._bf_ckpt_prefix + shard_id)
             return val.decode() if val else None
         except Exception as e:
             logger.warning(f"[{self.stream_name}:{shard_id}] Backfill checkpoint get failed: {e}")
@@ -381,21 +381,21 @@ class StreamConsumer:
 
     def _bf_ckpt_save(self, shard_id: str, seq: str):
         """保存 backfill checkpoint。"""
-        redis = self.checkpoint._redis
-        if redis is None:
+        rc = self.checkpoint.redis_client
+        if rc is None:
             return
         try:
-            redis.set(self._bf_ckpt_prefix + shard_id, seq)
+            rc.set(self._bf_ckpt_prefix + shard_id, seq)
         except Exception as e:
             logger.error(f"[{self.stream_name}:{shard_id}] Backfill checkpoint save failed: {e}")
 
     def _bf_ckpt_delete(self, shard_id: str):
         """shard 完成后清理 backfill checkpoint。"""
-        redis = self.checkpoint._redis
-        if redis is None:
+        rc = self.checkpoint.redis_client
+        if rc is None:
             return
         try:
-            redis.delete(self._bf_ckpt_prefix + shard_id)
+            rc.delete(self._bf_ckpt_prefix + shard_id)
         except Exception as e:
             logger.warning(f"[{self.stream_name}:{shard_id}] Backfill checkpoint delete failed: {e}")
 

@@ -28,6 +28,7 @@ K8S 分布式部署（基于 Redis 分布式锁）：
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -65,7 +66,8 @@ def _build_redis_client(cfg: dict) -> redis.Redis | None:
 
 def main():
     parser = argparse.ArgumentParser(description="CloudFront Kinesis Log Consumer")
-    parser.add_argument("--config", default="config.yaml")
+    _default_config = os.path.join(os.path.dirname(__file__), "config.yaml")
+    parser.add_argument("--config", default=_default_config)
     parser.add_argument("--list-checkpoints", action="store_true")
     parser.add_argument("--backfill", action="store_true")
     parser.add_argument("--start-time")

@@ -98,7 +98,6 @@ spec:
       containers:
         - name: consumer
           image: your-registry/cloudfront-consumer:latest
-          command: ["python", "main.py", "--config", "/etc/consumer/config.yaml"]
           env:
             # 通过环境变量覆盖 config.yaml 中的敏感配置
             - name: CF_DORIS__PASSWORD
@@ -113,7 +112,8 @@ spec:
                   key: redis-password
           volumeMounts:
             - name: config
-              mountPath: /etc/consumer
+              mountPath: /app/config.yaml
+              subPath: config.yaml
           resources:
             requests:
               cpu: "200m"
@@ -152,8 +152,6 @@ spec:
           command:
             - python
             - main.py
-            - --config
-            - /etc/consumer/config.yaml
             - --backfill
             - --start-time
             - "2026-03-01T00:00:00+00:00"
@@ -168,7 +166,8 @@ spec:
             # backfill 模式不连接 Redis，无需注入 CF_REDIS__PASSWORD
           volumeMounts:
             - name: config
-              mountPath: /etc/consumer
+              mountPath: /app/config.yaml
+              subPath: config.yaml
           resources:
             requests:
               cpu: "500m"

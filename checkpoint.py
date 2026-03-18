@@ -24,6 +24,11 @@ class Checkpoint:
         self._stream_name = stream_name
         self._mem: dict[str, str] = {}  # 无 Redis 时的内存降级存储
 
+    @property
+    def redis_client(self) -> redis_lib.Redis | None:
+        """暴露底层 Redis 客户端，供需要直接操作 Redis 的场景使用（如 backfill checkpoint）。"""
+        return self._redis
+
     def _key(self, shard_id: str) -> str:
         return f"cf:checkpoint:{self._stream_name}:{shard_id}"
 

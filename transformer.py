@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote
 
@@ -97,7 +98,13 @@ class Transformer:
     def _convert_types(self, record: dict[str, Any]) -> dict[str, Any]:
         """类型转换：时间格式、数值字段"""
         if log_time := record.get("log_time"):
-            record["log_time"] = log_time.replace("T", " ").replace("Z", "")
+            try:
+                # CloudFront 实时日志 timestamp 为 unix 浮点秒（如 1773800098.640）
+                ts = float(log_time)
+                record["log_time"] = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                # 兼容 ISO 格式（如 2026-03-18T08:00:00Z）
+                record["log_time"] = str(log_time).replace("T", " ").replace("Z", "")
 
         for f in self._int_fields:
             if (v := record.get(f)) is not None:

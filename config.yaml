@@ -35,23 +35,23 @@ transform:
   source_fields:
     - timestamp
     - c-ip
+    - time-taken
     - sc-status
+    - sc-bytes
     - cs-method
     - cs-host
     - cs-uri-stem
+    - x-edge-location
+    - x-edge-request-id
+    - time-to-first-byte
+    - cs-user-agent
     - cs-uri-query
-    - time-taken
-    - sc-bytes
-    - cs-bytes
+    - cs-referer
     - x-edge-result-type
     - x-edge-response-result-type
-    - x-edge-location
     - x-edge-detailed-result-type
-    - origin-fbl
-    - time-to-first-byte
-    - cs-referer
-    - cs-user-agent
     - ssl-protocol
+    - origin-fbl
     - asn
 
   target_fields:
@@ -64,9 +64,9 @@ transform:
     - uri_query
     - time_taken
     - bytes_sent
-    - bytes_received
     - edge_result
     - edge_location
+    - request_id
     - referer
     - user_agent
     - ssl_protocol
@@ -84,9 +84,9 @@ transform:
     "cs-uri-query": uri_query
     "time-taken": time_taken
     "sc-bytes": bytes_sent
-    "cs-bytes": bytes_received
     "x-edge-result-type": edge_result
     "x-edge-location": edge_location
+    "x-edge-request-id": request_id
     "cs-referer": referer
     "cs-user-agent": user_agent
     "ssl-protocol": ssl_protocol
@@ -109,7 +109,6 @@ transform:
   int_fields:
     - status_code
     - bytes_sent
-    - bytes_received
     - asn
 
   # 浮点类型字段（rename 后的目标字段名；未经 rename 的字段保持原始名）

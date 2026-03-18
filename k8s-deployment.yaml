@@ -32,13 +32,14 @@ data:
       lock_ttl: 30
       heartbeat_interval: 10.0
     transform:
-      source_fields: [timestamp, c-ip, sc-status, cs-method, cs-host, cs-uri-stem,
-        cs-uri-query, time-taken, sc-bytes, cs-bytes, x-edge-result-type,
-        x-edge-response-result-type, x-edge-location, x-edge-detailed-result-type,
-        origin-fbl, time-to-first-byte, cs-referer, cs-user-agent, ssl-protocol, asn]
+      source_fields: [timestamp, c-ip, time-taken, sc-status, sc-bytes, cs-method,
+        cs-host, cs-uri-stem, x-edge-location, x-edge-request-id, time-to-first-byte,
+        cs-user-agent, cs-uri-query, cs-referer, x-edge-result-type,
+        x-edge-response-result-type, x-edge-detailed-result-type,
+        ssl-protocol, origin-fbl, asn]
       target_fields: [log_time, client_ip, status_code, method, host, uri_path,
-        uri_query, time_taken, bytes_sent, bytes_received, edge_result,
-        edge_location, referer, user_agent, ssl_protocol, asn, source, extras]
+        uri_query, time_taken, bytes_sent, edge_result,
+        edge_location, request_id, referer, user_agent, ssl_protocol, asn, source, extras]
       rename:
         timestamp: log_time
         "c-ip": client_ip
@@ -49,9 +50,9 @@ data:
         "cs-uri-query": uri_query
         "time-taken": time_taken
         "sc-bytes": bytes_sent
-        "cs-bytes": bytes_received
         "x-edge-result-type": edge_result
         "x-edge-location": edge_location
+        "x-edge-request-id": request_id
         "cs-referer": referer
         "cs-user-agent": user_agent
         "ssl-protocol": ssl_protocol
@@ -59,7 +60,7 @@ data:
       add_fields:
         source: "literal:cloudfront"
       url_decode_fields: [uri_query, referer, user_agent]
-      int_fields: [status_code, bytes_sent, bytes_received, asn]
+      int_fields: [status_code, bytes_sent, asn]
       float_fields: [time_taken, origin-fbl, time-to-first-byte]
       strip_query_fields: [uri_path]
 

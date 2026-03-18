@@ -16,7 +16,6 @@ StreamConsumer 负责：
 run_debug_format 用于调试：
   从指定时间点拉取有限条日志，经 Transformer 处理后打印 JSON，不写 Doris，不更新 checkpoint。
 """
-import base64
 import json
 import logging
 import time
@@ -269,7 +268,7 @@ class StreamConsumer:
                     # 返回已写入的最后一条 seq（last_seq 为空表示本批没有写入任何记录）
                     return last_seq, True
             try:
-                raw = base64.b64decode(r["Data"]).decode("utf-8", errors="replace")
+                raw = r["Data"].decode("utf-8", errors="replace")
                 parsed = self.transformer.parse(raw)
                 if parsed:
                     self.writer.write(parsed)
@@ -456,7 +455,7 @@ def run_debug_format(cfg: dict, at_timestamp: str | None, limit: int):
                 if len(collected) >= limit:
                     break
                 try:
-                    raw = base64.b64decode(r["Data"]).decode("utf-8", errors="replace")
+                    raw = r["Data"].decode("utf-8", errors="replace")
                     if parsed := transformer.parse(raw):
                         collected.append(parsed)
                 except Exception as e:

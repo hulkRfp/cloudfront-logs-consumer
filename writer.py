@@ -98,13 +98,25 @@ class DorisWriter:
             # 关闭严格模式，允许部分字段缺失；如需严格可改为 true
             "strict_mode": "false",
         }
+        # allow_redirects=False：FE 会 302 重定向到 BE，requests 默认跟随重定向但不带 auth
+        # 手动跟随重定向并重新附加 auth，确保 BE 收到认证信息
         resp = requests.put(
             self._url,
             data="\n".join(lines).encode("utf-8"),
             headers=headers,
             auth=self.auth,
             timeout=60,
+            allow_redirects=False,
         )
+        if resp.status_code in (301, 302, 307, 308):
+            redirect_url = resp.headers.get("Location")
+            resp = requests.put(
+                redirect_url,
+                data="\n".join(lines).encode("utf-8"),
+                headers=headers,
+                auth=self.auth,
+                timeout=60,
+            )
         resp.raise_for_status()
         result = resp.json()
         status = result.get("Status")

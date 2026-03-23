@@ -213,9 +213,11 @@ class StreamConsumer:
         - 无锁模式：直接持有所有 shard（单实例）
         - 分布式锁模式：
           1. 计算公平份额，若持有超额则主动让出，触发 rebalance
-          2. 对所有未在本地消费的 shard 尝试抢锁
+          2. 对所有未在本地消费的 shard 尝试抢锁（跳过本轮刚释放的）
           一个 Pod 可持有多个 shard，shard 数 > Pod 数时自动均摊。
         """
+        released: set[str] = set()  # 本轮主动释放的 shard，避免释放后又被自己抢回
+
         if self.lock_manager:
             total = len(open_ids)
             share = self.lock_manager.fair_share(total)
@@ -231,9 +233,10 @@ class StreamConsumer:
                     )
                     iterators.pop(sid, None)
                     self.lock_manager.release(sid)
+                    released.add(sid)
 
         for sid in open_ids:
-            if sid in iterators or sid in closed_shards:
+            if sid in iterators or sid in closed_shards or sid in released:
                 continue
             if self.lock_manager:
                 if self.lock_manager.try_acquire(sid):

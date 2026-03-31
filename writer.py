@@ -134,7 +134,16 @@ class DorisWriter:
                     )
                 else:
                     logger.info(f"Stream Load OK label={label} rows={len(lines)}")
-            case "Label Already Exists" if result.get("ExistingJobStatus") in ("VISIBLE", "COMMITTED"):
-                logger.info(f"Stream Load label={label} already committed, skipping")
+            case "Label Already Exists":
+                existing = result.get("ExistingJobStatus", "")
+                if existing in ("VISIBLE", "COMMITTED"):
+                    logger.info(f"Stream Load label={label} already committed, skipping")
+                elif existing in ("PREPARE", "PRECOMMITTED"):
+                    # 前一次请求仍在处理中，等待重试时自然会变为 VISIBLE/COMMITTED
+                    raise RuntimeError(
+                        f"Stream Load label={label} in progress (status={existing}), retrying"
+                    )
+                else:
+                    raise RuntimeError(f"Stream Load failed: {result}")
             case _:
                 raise RuntimeError(f"Stream Load failed: {result}")

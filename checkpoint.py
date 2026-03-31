@@ -68,16 +68,20 @@ class Checkpoint:
         if self._redis is None:
             return dict(self._mem)
         try:
-            keys = self._redis.keys(f"cf:checkpoint:{self._stream_name}:*")
-            if not keys:
-                return {}
-            values = self._redis.mget(keys)
+            pattern = f"cf:checkpoint:{self._stream_name}:*"
             prefix_len = len(f"cf:checkpoint:{self._stream_name}:")
-            return {
-                k.decode()[prefix_len:]: v.decode()
-                for k, v in zip(keys, values)
-                if v is not None
-            }
+            result: dict[str, str] = {}
+            cursor = 0
+            while True:
+                cursor, keys = self._redis.scan(cursor, match=pattern, count=100)
+                if keys:
+                    values = self._redis.mget(keys)
+                    for k, v in zip(keys, values):
+                        if v is not None:
+                            result[k.decode()[prefix_len:]] = v.decode()
+                if cursor == 0:
+                    break
+            return result
         except Exception as e:
             logger.warning(f"Checkpoint all() failed: {e}")
             return {}

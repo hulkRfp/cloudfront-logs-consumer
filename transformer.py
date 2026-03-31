@@ -124,10 +124,18 @@ class Transformer:
 
 def _url_decode_safe(value: str) -> str:
     """
-    对 URL 编码的字段做解码，保留所有原始字符（包括注入类特殊字符）。
-    解码失败时返回原始值。
+    对 URL 编码的字段做解码，支持多层编码（CloudFront 实时日志会对
+    cs-uri-query 等字段做额外一层 URL 编码，导致需要多次解码）。
+    最多解码 5 次，防止异常数据导致无限循环。解码失败时返回原始值。
     """
     try:
-        return unquote(value, encoding="utf-8", errors="replace")
+        result = value
+        for _ in range(5):
+            decoded = unquote(result, encoding="utf-8", errors="replace")
+            if decoded == result:
+                break
+            result = decoded
+        return result
     except Exception:
         return value
+

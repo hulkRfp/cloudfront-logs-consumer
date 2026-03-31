@@ -23,7 +23,7 @@ from datetime import datetime
 
 import boto3
 from botocore.exceptions import ClientError
-from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log, retry_if_exception
 
 from checkpoint import Checkpoint
 from lock import ShardLockManager
@@ -31,6 +31,17 @@ from transformer import Transformer
 from writer import DorisWriter
 
 logger = logging.getLogger(__name__)
+
+
+def _is_throttle_error(exc: BaseException) -> bool:
+    """仅对 Kinesis 限流错误重试，其他错误（iterator 失效、超时等）不重试。"""
+    return (
+        isinstance(exc, ClientError)
+        and exc.response["Error"]["Code"] in (
+            "ProvisionedThroughputExceededException",
+            "KMSThrottlingException",
+        )
+    )
 
 
 class StreamConsumer:
@@ -58,6 +69,8 @@ class StreamConsumer:
         self.writer = writer
         self.client = boto3.client("kinesis", region_name=self.region)
         self._running = False
+        # 记录每个 shard 当前处理到的最新 seq，flush 成功后批量更新 checkpoint
+        self._pending_seqs: dict[str, str] = {}
         # backfill 专用 checkpoint 前缀，与正常消费位点隔离
         self._bf_ckpt_prefix = f"cf:backfill-checkpoint:{self.stream_name}:"
 
@@ -66,10 +79,6 @@ class StreamConsumer:
         iterators: dict[str, str] = {}
         closed_shards: set[str] = set()
         last_refresh = 0.0
-        # 记录每个 shard 当前处理到的最新 seq，flush 成功后批量更新 checkpoint
-        # 多 shard 共享同一 writer，flush 时 buffer 里可能有多个 shard 的数据，
-        # 必须对所有涉及的 shard 一起更新 checkpoint，避免部分 shard 数据落盘但位点未推进
-        pending_seqs: dict[str, str] = {}
 
         while self._running:
             if time.monotonic() - last_refresh >= self.shard_refresh:
@@ -153,24 +162,24 @@ class StreamConsumer:
                             self.writer.flush()
                     else:
                         # 攒够 batch_size 或超过 flush_interval 才 flush，减少小文件
-                        # pending_seqs 记录本轮所有 shard 的最新 seq，flush 后批量更新 checkpoint
+                        # _pending_seqs 记录本轮所有 shard 的最新 seq，flush 后批量更新 checkpoint
                         # 避免多 shard 共享 writer 时只更新触发 flush 的那个 shard 的位点
                         if last_seq:
-                            pending_seqs[shard_id] = last_seq
+                            self._pending_seqs[shard_id] = last_seq
                         if self.writer.should_flush():
                             self.writer.flush()
-                            for sid, seq in list(pending_seqs.items()):
+                            for sid, seq in list(self._pending_seqs.items()):
                                 self.checkpoint.save(sid, seq)
-                            pending_seqs.clear()
+                            self._pending_seqs.clear()
                     if lag and lag > 60000:
                         logger.warning(f"[{self.stream_name}:{shard_id}] {lag}ms behind")
                 elif self.writer.should_flush():
                     # 无新数据时兜底 flush（超过 flush_interval）
                     self.writer.flush()
                     if not self.backfill:
-                        for sid, seq in list(pending_seqs.items()):
+                        for sid, seq in list(self._pending_seqs.items()):
                             self.checkpoint.save(sid, seq)
-                        pending_seqs.clear()
+                        self._pending_seqs.clear()
 
                 if next_iter is None:
                     logger.info(f"[{self.stream_name}:{shard_id}] Shard closed")
@@ -178,9 +187,9 @@ class StreamConsumer:
                     if self.writer.has_pending():
                         self.writer.flush()
                         if not self.backfill:
-                            for sid, seq in list(pending_seqs.items()):
+                            for sid, seq in list(self._pending_seqs.items()):
                                 self.checkpoint.save(sid, seq)
-                            pending_seqs.clear()
+                            self._pending_seqs.clear()
                     if self.backfill:
                         self._bf_ckpt_delete(shard_id)
                     closed_shards.add(shard_id)
@@ -204,6 +213,11 @@ class StreamConsumer:
         self._running = False
         try:
             self.writer.flush()
+            # flush 成功后保存所有 pending checkpoint，避免重启后重复消费
+            if not self.backfill:
+                for sid, seq in list(self._pending_seqs.items()):
+                    self.checkpoint.save(sid, seq)
+                self._pending_seqs.clear()
         except Exception as e:
             logger.error(f"Flush on stop failed: {e}")
 
@@ -223,7 +237,17 @@ class StreamConsumer:
             share = self.lock_manager.fair_share(total)
             held = self.lock_manager.held_count()
             if held > share:
-                # 主动让出超额的 shard，held_shards() 返回有序列表保证确定性
+                # 主动让出超额的 shard 前，先 flush buffer 并保存 checkpoint，
+                # 避免释放锁后 buffer 中残留该 shard 的数据导致丢失或重复
+                if self.writer.has_pending():
+                    try:
+                        self.writer.flush()
+                        for sid, seq in list(self._pending_seqs.items()):
+                            self.checkpoint.save(sid, seq)
+                        self._pending_seqs.clear()
+                    except Exception as e:
+                        logger.error(f"[{self.stream_name}] Flush before rebalance failed: {e}")
+
                 excess = held - share
                 to_release = self.lock_manager.held_shards()[:excess]
                 for sid in to_release:
@@ -252,6 +276,7 @@ class StreamConsumer:
             if sid not in open_ids:
                 logger.info(f"[{self.stream_name}] Shard {sid} no longer open, releasing")
                 iterators.pop(sid, None)
+                self._pending_seqs.pop(sid, None)
                 if self.lock_manager:
                     self.lock_manager.release(sid)
 
@@ -286,7 +311,8 @@ class StreamConsumer:
             last_seq = r["SequenceNumber"]  # 无论成功或跳过，均推进到当前记录的 seq
         return last_seq, False
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=2, max=30),
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10),
+           retry=retry_if_exception(_is_throttle_error),
            before_sleep=before_sleep_log(logger, logging.WARNING), reraise=True)
     def _get_records(self, iterator: str) -> tuple:
         resp = self.client.get_records(ShardIterator=iterator, Limit=self.batch_size)

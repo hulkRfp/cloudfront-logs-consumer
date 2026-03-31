@@ -39,6 +39,14 @@ class ShardLockManager:
     end
     """
 
+    _RENEW_SCRIPT = """
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+        return redis.call('pexpire', KEYS[1], ARGV[2])
+    else
+        return 0
+    end
+    """
+
     def __init__(self, redis_client: redis.Redis, stream_name: str,
                  lock_ttl: int = 30, heartbeat_interval: float = 10.0):
         self._redis = redis_client
@@ -64,10 +72,17 @@ class ShardLockManager:
         return f"cf:worker:{self._stream_name}:{self._worker_id}"
 
     def online_worker_count(self) -> int:
-        """统计当前在线的 worker 数量（通过 Redis key 扫描）。"""
+        """统计当前在线的 worker 数量（通过 Redis SCAN 扫描）。"""
         try:
-            keys = self._redis.keys(f"cf:worker:{self._stream_name}:*")
-            return max(len(keys), 1)
+            count = 0
+            cursor = 0
+            pattern = f"cf:worker:{self._stream_name}:*"
+            while True:
+                cursor, keys = self._redis.scan(cursor, match=pattern, count=100)
+                count += len(keys)
+                if cursor == 0:
+                    break
+            return max(count, 1)
         except Exception as e:
             logger.warning(f"Failed to count online workers: {e}")
             return 1
@@ -116,14 +131,14 @@ class ShardLockManager:
             except Exception as e:
                 logger.error(f"Worker heartbeat failed: {e}")
 
-            # 续期 shard 锁
+            # 续期 shard 锁（Lua 脚本原子校验 + 续期，避免 get/pexpire 之间的竞态）
             for shard_id in list(self._held):
                 key = self._key(shard_id)
                 try:
-                    current = self._redis.get(key)
-                    if current and current.decode() == self._worker_id:
-                        self._redis.pexpire(key, self._lock_ttl_ms)
-                    else:
+                    renewed = self._redis.eval(
+                        self._RENEW_SCRIPT, 1, key, self._worker_id, self._lock_ttl_ms
+                    )
+                    if not renewed:
                         logger.warning(f"Lost lock for shard {shard_id}, removing from held set")
                         self._held.discard(shard_id)
                 except Exception as e:
@@ -132,6 +147,7 @@ class ShardLockManager:
     def stop(self):
         """停止心跳线程，释放所有锁，注销 worker 心跳。"""
         self._stop_heartbeat.set()
+        self._heartbeat_thread.join(timeout=5)  # 等待心跳线程退出，避免与 release_all 竞态
         self.release_all()
         try:
             self._redis.delete(self._worker_key())

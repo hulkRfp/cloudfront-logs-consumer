@@ -33,6 +33,12 @@ class Transformer:
         self._int_fields: frozenset[str] = frozenset(t.get("int_fields") or [])
         self._float_fields: frozenset[str] = frozenset(t.get("float_fields") or [])
         self._strip_query_fields: frozenset[str] = frozenset(t.get("strip_query_fields") or [])
+        # Cookie 字段提取配置
+        cookie_cfg = t.get("cookie_fields") or {}
+        self._cookie_source_field: str = cookie_cfg.get("source_field", "")
+        self._cookie_mappings: dict[str, str] = cookie_cfg.get("mappings") or {}
+        self._cookie_url_decode: bool = cookie_cfg.get("url_decode", False)
+        self._cookie_default: Any = cookie_cfg.get("default_value", None)
 
     def parse(self, raw_line: str) -> dict[str, Any] | None:
         """
@@ -71,6 +77,16 @@ class Transformer:
         for field in self._strip_query_fields:
             if (v := renamed.get(field)):
                 renamed[field] = v.split("?", 1)[0]
+
+        # 5c. Cookie 字段提取：从指定字段解析 cookie 字符串，提取指定 key 的值为独立字段
+        if self._cookie_source_field and self._cookie_mappings:
+            cookie_raw = renamed.get(self._cookie_source_field)
+            cookie_dict = _parse_cookie(cookie_raw) if cookie_raw else {}
+            for cookie_key, output_field in self._cookie_mappings.items():
+                value = cookie_dict.get(cookie_key, self._cookie_default)
+                if value is not None and self._cookie_url_decode:
+                    value = _url_decode_safe(value)
+                renamed[output_field] = value
 
         # 6. 类型转换
         renamed = self._convert_types(renamed)
@@ -138,4 +154,27 @@ def _url_decode_safe(value: str) -> str:
         return result
     except Exception:
         return value
+
+
+def _parse_cookie(cookie_str: str) -> dict[str, str]:
+    """
+    解析 HTTP Cookie 字符串为字典。
+    支持标准格式：key1=value1; key2=value2
+    也兼容无空格分隔：key1=value1;key2=value2
+    值中可能包含 '='（如 Base64），仅按第一个 '=' 分割。
+    """
+    result: dict[str, str] = {}
+    if not cookie_str or cookie_str == _EMPTY:
+        return result
+    for pair in cookie_str.split(";"):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            result[key.strip()] = value.strip()
+        else:
+            # 无值的 cookie（如 flag 类型），值设为空字符串
+            result[pair.strip()] = ""
+    return result
 

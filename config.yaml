@@ -122,3 +122,18 @@ transform:
   # cs-uri-stem 经 rename 后为 uri_path，此处填 uri_path
   strip_query_fields:
     - uri_path
+
+  # Cookie 字段提取：从指定源字段解析 cookie 字符串，将指定 key 的值提取为独立字段
+  # source_field: 包含 cookie 字符串的字段名（使用 rename 后的目标字段名）
+  # mappings: cookie 中的 key → 输出字段名（输出字段名需同步添加到 target_fields 中才能作为顶层字段）
+  # url_decode: 是否对提取的 cookie 值做 URL 解码（默认 false）
+  # default_value: cookie key 不存在时的默认值（默认 null）
+  cookie_fields:
+    source_field: "cs-cookie"       # CloudFront 实时日志中的 cookie 字段（rename 后的名称）
+    url_decode: true
+    default_value: null
+    mappings:
+      # cookie_key: output_field_name
+      # 示例：提取 cookie 中的 user_id 和 session_id
+      # user_id: "cookie_user_id"
+      # session_id: "cookie_session_id"

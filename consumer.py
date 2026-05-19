@@ -44,6 +44,30 @@ def _is_throttle_error(exc: BaseException) -> bool:
     )
 
 
+def _build_kinesis_client(kinesis_cfg: dict):
+    """
+    构建 Kinesis boto3 client。
+
+    如果配置了 aws_access_key_id / aws_secret_access_key，使用指定凭证（跨账户场景）；
+    否则走默认凭证链（EC2 Instance Role / 环境变量 / ~/.aws/credentials）。
+    """
+    region = kinesis_cfg["region"]
+    ak = kinesis_cfg.get("aws_access_key_id")
+    sk = kinesis_cfg.get("aws_secret_access_key")
+
+    if ak and sk:
+        logger.info("Using explicit Access Key for Kinesis client (cross-account mode)")
+        return boto3.client(
+            "kinesis",
+            region_name=region,
+            aws_access_key_id=ak,
+            aws_secret_access_key=sk,
+        )
+    else:
+        logger.info("Using default credential chain for Kinesis client")
+        return boto3.client("kinesis", region_name=region)
+
+
 class StreamConsumer:
     def __init__(self, stream_cfg: dict, checkpoint: Checkpoint,
                  transformer: Transformer, writer: DorisWriter,
@@ -60,6 +84,10 @@ class StreamConsumer:
         self.initial_position: str = k.get("initial_position", "LATEST").upper()
         self.initial_timestamp: str | None = k.get("initial_timestamp")
 
+        # 跨账户 Access Key 配置（可选）
+        # 配置后使用指定凭证，否则走默认凭证链（EC2 Instance Role / 环境变量）
+        self.stream_arn: str | None = k.get("stream_arn")
+
         self.lock_manager = lock_manager
         self.backfill = backfill
         self.backfill_end = backfill_end
@@ -67,7 +95,7 @@ class StreamConsumer:
         self.checkpoint = checkpoint
         self.transformer = transformer
         self.writer = writer
-        self.client = boto3.client("kinesis", region_name=self.region)
+        self.client = _build_kinesis_client(k)
         self._running = False
         # 记录每个 shard 当前处理到的最新 seq，flush 成功后批量更新 checkpoint
         self._pending_seqs: dict[str, str] = {}
@@ -328,25 +356,31 @@ class StreamConsumer:
         backfill 模式：传入 start_time，使用 FROM_TIMESTAMP filter，
           返回该时间点之后所有有效 shard，包含 CLOSED（已停止写入但数据未过期）的 parent shard，
           确保补跑时不遗漏 split/merge 前的历史数据。
+
+        跨账户时使用 StreamARN 替代 StreamName。
         """
         shards = []
+        # 跨账户时用 StreamARN，同账户用 StreamName
+        stream_id_param = (
+            {"StreamARN": self.stream_arn} if self.stream_arn
+            else {"StreamName": self.stream_name}
+        )
         if start_time:
-            # FROM_TIMESTAMP 返回在该时间点之后存在的所有 shard（含 CLOSED，不含 EXPIRED）
             kwargs: dict = {
-                "StreamName": self.stream_name,
+                **stream_id_param,
                 "ShardFilter": {
                     "Type": "FROM_TIMESTAMP",
                     "Timestamp": start_time,
                 },
             }
         else:
-            kwargs = {"StreamName": self.stream_name}
+            kwargs = {**stream_id_param}
         while True:
             resp = self.client.list_shards(**kwargs)
             shards.extend(resp.get("Shards", []))
             if not (next_token := resp.get("NextToken")):
                 break
-            # 翻页时只传 NextToken，不能同时传 StreamName/ShardFilter
+            # 翻页时只传 NextToken，不能同时传 StreamName/StreamARN/ShardFilter
             kwargs = {"NextToken": next_token}
         return shards
 
@@ -359,10 +393,16 @@ class StreamConsumer:
             seq = self.checkpoint.get(shard_id)
         if seq:
             try:
-                resp = self.client.get_shard_iterator(
-                    StreamName=self.stream_name, ShardId=shard_id,
-                    ShardIteratorType="AFTER_SEQUENCE_NUMBER", StartingSequenceNumber=seq,
-                )
+                iter_kwargs = {
+                    "ShardId": shard_id,
+                    "ShardIteratorType": "AFTER_SEQUENCE_NUMBER",
+                    "StartingSequenceNumber": seq,
+                }
+                if self.stream_arn:
+                    iter_kwargs["StreamARN"] = self.stream_arn
+                else:
+                    iter_kwargs["StreamName"] = self.stream_name
+                resp = self.client.get_shard_iterator(**iter_kwargs)
                 logger.info(f"[{self.stream_name}:{shard_id}] Resuming from {'backfill ' if self.backfill else ''}checkpoint")
                 return resp["ShardIterator"]
             except ClientError as e:
@@ -381,19 +421,21 @@ class StreamConsumer:
         return self._initial_iterator(shard_id)
 
     def _initial_iterator(self, shard_id: str) -> str:
+        iter_kwargs: dict = {"ShardId": shard_id}
+        if self.stream_arn:
+            iter_kwargs["StreamARN"] = self.stream_arn
+        else:
+            iter_kwargs["StreamName"] = self.stream_name
+
         if self.initial_position == "AT_TIMESTAMP":
             if not self.initial_timestamp:
                 raise ValueError("initial_timestamp required when initial_position=AT_TIMESTAMP")
-            resp = self.client.get_shard_iterator(
-                StreamName=self.stream_name, ShardId=shard_id,
-                ShardIteratorType="AT_TIMESTAMP",
-                Timestamp=datetime.fromisoformat(self.initial_timestamp),
-            )
+            iter_kwargs["ShardIteratorType"] = "AT_TIMESTAMP"
+            iter_kwargs["Timestamp"] = datetime.fromisoformat(self.initial_timestamp)
         else:
-            resp = self.client.get_shard_iterator(
-                StreamName=self.stream_name, ShardId=shard_id,
-                ShardIteratorType=self.initial_position,
-            )
+            iter_kwargs["ShardIteratorType"] = self.initial_position
+
+        resp = self.client.get_shard_iterator(**iter_kwargs)
         logger.info(f"[{self.stream_name}:{shard_id}] Starting from {self.initial_position}")
         return resp["ShardIterator"]
 
@@ -437,20 +479,26 @@ def run_debug_format(cfg: dict, at_timestamp: str | None, limit: int):
     从指定时间点（或 TRIM_HORIZON）拉取最多 limit 条日志，
     经 Transformer 处理后以 JSON 格式打印到控制台，不写 Doris，不更新 checkpoint。
     """
-    stream_name = cfg["kinesis"]["stream_name"]
-    region = cfg["kinesis"]["region"]
+    k = cfg["kinesis"]
+    stream_name = k["stream_name"]
+    stream_arn = k.get("stream_arn")
     transformer = Transformer(cfg)
-    client = boto3.client("kinesis", region_name=region)
+    client = _build_kinesis_client(k)
+
+    # 跨账户时用 StreamARN，同账户用 StreamName
+    stream_id_param = (
+        {"StreamARN": stream_arn} if stream_arn
+        else {"StreamName": stream_name}
+    )
 
     shards: list[dict] = []
     if at_timestamp:
-        # FROM_TIMESTAMP 返回该时间点之后所有有效 shard（含 CLOSED），避免遗漏历史数据
         kwargs: dict = {
-            "StreamName": stream_name,
+            **stream_id_param,
             "ShardFilter": {"Type": "FROM_TIMESTAMP", "Timestamp": datetime.fromisoformat(at_timestamp)},
         }
     else:
-        kwargs = {"StreamName": stream_name}
+        kwargs = {**stream_id_param}
     while True:
         resp = client.list_shards(**kwargs)
         shards.extend(resp.get("Shards", []))
@@ -465,17 +513,19 @@ def run_debug_format(cfg: dict, at_timestamp: str | None, limit: int):
     for shard_id in sorted(open_shards):
         if len(collected) >= limit:
             break
-        if at_timestamp:
-            resp = client.get_shard_iterator(
-                StreamName=stream_name, ShardId=shard_id,
-                ShardIteratorType="AT_TIMESTAMP",
-                Timestamp=datetime.fromisoformat(at_timestamp),
-            )
+        iter_kwargs: dict = {"ShardId": shard_id}
+        if stream_arn:
+            iter_kwargs["StreamARN"] = stream_arn
         else:
-            resp = client.get_shard_iterator(
-                StreamName=stream_name, ShardId=shard_id,
-                ShardIteratorType="TRIM_HORIZON",
-            )
+            iter_kwargs["StreamName"] = stream_name
+
+        if at_timestamp:
+            iter_kwargs["ShardIteratorType"] = "AT_TIMESTAMP"
+            iter_kwargs["Timestamp"] = datetime.fromisoformat(at_timestamp)
+        else:
+            iter_kwargs["ShardIteratorType"] = "TRIM_HORIZON"
+
+        resp = client.get_shard_iterator(**iter_kwargs)
         iterator = resp["ShardIterator"]
 
         for _ in range(10):

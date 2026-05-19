@@ -9,6 +9,13 @@ kinesis:
   # initial_timestamp: "2026-03-15T10:00:00+00:00"  # AT_TIMESTAMP 时生效
   stream_name: "cloudfront-realtime-logs"
 
+  # 跨账户访问配置（可选）
+  # 配置 Access Key 后使用指定凭证访问 Kinesis，不配置则走默认凭证链（EC2 Instance Role / 环境变量）
+  # 跨账户时必须配置 stream_arn，因为 StreamName 在跨账户场景下无法定位资源
+  # aws_access_key_id: "AKIAxxxxxxxxxxxxxxxx"
+  # aws_secret_access_key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  # stream_arn: "arn:aws:kinesis:us-east-1:111111111111:stream/cloudfront-realtime-logs"
+
 doris:
   fe_host: "doris-fe"
   fe_port: 8030

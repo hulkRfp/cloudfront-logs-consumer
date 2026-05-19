@@ -343,7 +343,11 @@ class StreamConsumer:
            retry=retry_if_exception(_is_throttle_error),
            before_sleep=before_sleep_log(logger, logging.WARNING), reraise=True)
     def _get_records(self, iterator: str) -> tuple:
-        resp = self.client.get_records(ShardIterator=iterator, Limit=self.batch_size)
+        kwargs: dict = {"ShardIterator": iterator, "Limit": self.batch_size}
+        # 跨账户时显式传 StreamARN，确保权限校验正确
+        if self.stream_arn:
+            kwargs["StreamARN"] = self.stream_arn
+        resp = self.client.get_records(**kwargs)
         return resp.get("Records", []), resp.get("NextShardIterator"), resp.get("MillisBehindLatest")
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=1, max=10),
@@ -531,7 +535,10 @@ def run_debug_format(cfg: dict, at_timestamp: str | None, limit: int):
         for _ in range(10):
             if len(collected) >= limit:
                 break
-            fetch_resp = client.get_records(ShardIterator=iterator, Limit=min(100, limit - len(collected)))
+            get_kwargs: dict = {"ShardIterator": iterator, "Limit": min(100, limit - len(collected))}
+            if stream_arn:
+                get_kwargs["StreamARN"] = stream_arn
+            fetch_resp = client.get_records(**get_kwargs)
             records = fetch_resp.get("Records", [])
             iterator = fetch_resp.get("NextShardIterator", "")
             for r in records:
